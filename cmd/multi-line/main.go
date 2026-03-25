@@ -1,99 +1,65 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
-)
 
-type Input struct {
-	Model struct {
-		DisplayName string `json:"display_name"`
-	} `json:"model"`
-	Workspace struct {
-		CurrentDir string `json:"current_dir"`
-	} `json:"workspace"`
-	Cost struct {
-		TotalCostUSD    float64 `json:"total_cost_usd"`
-		TotalDurationMS int64   `json:"total_duration_ms"`
-	} `json:"cost"`
-	ContextWindow struct {
-		UsedPercentage float64 `json:"used_percentage"`
-	} `json:"context_window"`
-}
-
-const (
-	cyan   = "\033[36m"
-	green  = "\033[32m"
-	yellow = "\033[33m"
-	red    = "\033[31m"
-	reset  = "\033[0m"
+	"github.com/jasonkradams/claude/pkg/status"
 )
 
 func main() {
-	data, err := io.ReadAll(os.Stdin)
+	input, err := status.ReadInput()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error reading stdin:", err)
-		os.Exit(1)
-	}
-
-	var input Input
-	if err := json.Unmarshal(data, &input); err != nil {
-		fmt.Fprintln(os.Stderr, "error parsing JSON:", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
 	pct := int(input.ContextWindow.UsedPercentage)
+	barColor := status.ColorForPct(pct)
+	bar := status.Bar(pct, "█", "░")
 
-	barColor := green
-	switch {
-	case pct >= 90:
-		barColor = red
-	case pct >= 70:
-		barColor = yellow
+	// Line 1: model, dir, branch, repo link
+	branch := status.Branch()
+	branchStr := ""
+	if branch != "" {
+		branchStr = " | 🌿 " + branch
 	}
 
-	filled := min(pct/10, 10)
-	bar := strings.Repeat("█", filled) + strings.Repeat("░", 10-filled)
-
-	mins := input.Cost.TotalDurationMS / 60000
-	secs := (input.Cost.TotalDurationMS % 60000) / 1000
-
-	dir := input.Workspace.CurrentDir
-	if idx := strings.LastIndex(dir, "/"); idx >= 0 {
-		dir = dir[idx+1:]
+	linkStr := ""
+	if remote, err := exec.Command("git", "remote", "get-url", "origin").Output(); err == nil {
+		url := strings.TrimSpace(string(remote))
+		url = strings.Replace(url, "git@github.com:", "https://github.com/", 1)
+		url = strings.TrimSuffix(url, ".git")
+		repoName := filepath.Base(url)
+		linkStr = fmt.Sprintf(" | 🔗 \033]8;;%s\007%s\033]8;;\007", url, repoName)
 	}
 
-	branch := gitBranch()
+	line1 := fmt.Sprintf("%s[%s]%s 📁 %s%s%s",
+		status.Cyan, input.Model.DisplayName, status.Reset,
+		input.DirName(), branchStr, linkStr)
 
-	line1 := fmt.Sprintf("%s[%s]%s 📁 %s%s", cyan, input.Model.DisplayName, reset, dir, branch)
-	line2 := fmt.Sprintf("%s%s%s %d%% | %s$%.2f%s | ⏱️ %dm %ds",
-		barColor, bar, reset,
+	// Line 2: context bar, cost, duration, rate limits
+	var rateParts []string
+	if input.RateLimits.FiveHour != nil {
+		rateParts = append(rateParts, fmt.Sprintf("5h: %.0f%%", input.RateLimits.FiveHour.UsedPercentage))
+	}
+	if input.RateLimits.SevenDay != nil {
+		rateParts = append(rateParts, fmt.Sprintf("7d: %.0f%%", input.RateLimits.SevenDay.UsedPercentage))
+	}
+
+	line2 := fmt.Sprintf("%s%s%s %d%% | %s%s%s | ⏱️ %s",
+		barColor, bar, status.Reset,
 		pct,
-		yellow, input.Cost.TotalCostUSD, reset,
-		mins, secs,
-	)
+		status.Yellow, status.Cost(input.Cost.TotalCostUSD), status.Reset,
+		status.Duration(input.Cost.TotalDurationMS))
+
+	if len(rateParts) > 0 {
+		line2 += fmt.Sprintf(" | %s", strings.Join(rateParts, " "))
+	}
 
 	fmt.Println(line1)
 	fmt.Println(line2)
-}
-
-func gitBranch() string {
-	cmd := exec.Command("git", "rev-parse", "--git-dir")
-	cmd.Stderr = nil
-	if err := cmd.Run(); err != nil {
-		return ""
-	}
-	out, err := exec.Command("git", "branch", "--show-current").Output()
-	if err != nil {
-		return ""
-	}
-	b := strings.TrimSpace(string(out))
-	if b == "" {
-		return ""
-	}
-	return " | 🌿 " + b
 }

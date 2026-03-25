@@ -2,14 +2,25 @@ default: help
 
 ##@ Build
 
+WIDGETS    := multi-line
+BINS       := $(addprefix bin/,$(WIDGETS))
 GO_SOURCES := $(shell find . -name '*.go' -not -path './vendor/*')
 
-build: bin/multi-line ## build all widgets to bin/
+build: $(BINS) ## build all widgets to bin/
 
-build-multi-line: bin/multi-line
+.prepare: $(GO_SOURCES)
+	@echo "==> Formatting..."
+	@go fmt ./...
+	@echo "==> Vetting..."
+	@go vet ./...
+	@echo "==> Fixing..."
+	@go fix ./...
+	@touch $@
 
-bin/multi-line: $(GO_SOURCES)
-	@"$(CURDIR)/scripts/build-multi-line.sh"
+$(BINS): bin/%: .prepare
+	@"$(CURDIR)/scripts/build-widget.sh" $* ./cmd/$*
+
+build-%: bin/%
 
 ##@ Utilities
 
@@ -22,7 +33,6 @@ clean: ## clean build artifacts
 help:
 	@awk ' \
 		BEGIN { \
-			cyan  = "\033[36m"; \
 			green = "\033[32m"; \
 			bold  = "\033[1m"; \
 			reset = "\033[0m"; \
@@ -39,4 +49,4 @@ help:
 
 .NOTPARALLEL:
 
-.PHONY: build build-multi-line install clean help default
+.PHONY: build $(addprefix build-,$(WIDGETS)) install clean help default

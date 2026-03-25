@@ -5,3 +5,4 @@ GOBIN="${GOBIN:-$(pwd)/bin}"
 
 echo "==> Cleaning build artifacts..."
 rm -rf "$GOBIN"
+rm -f .prepare
